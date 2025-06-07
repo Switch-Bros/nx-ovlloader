@@ -7,9 +7,15 @@
 
 #define DEFAULT_NRO "sdmc:/switch/.overlays/ovlmenu.ovl"
 
+#if BUILD_LOADER_PLUS_DIRECTIVE
 const char g_noticeText[] =
     "nx-ovlloader+ " VERSION "\0"
     "What's the most resilient parasite? A bacteria? A virus? An intestinal worm? An idea. Resilient, highly contagious.";
+#else
+const char g_noticeText[] =
+    "nx-ovlloader " VERSION "\0"
+    "What's the most resilient parasite? A bacteria? A virus? An intestinal worm? An idea. Resilient, highly contagious.";
+#endif
 
 static char g_argv[2048];
 static char g_nextArgv[2048];
@@ -61,7 +67,11 @@ void __appInit(void)
         rc = setsysGetFirmwareVersion(&fw);
         if (R_SUCCEEDED(rc))
             hosversionSet(MAKEHOSVERSION(fw.major, fw.minor, fw.micro));
+    #if BUILD_LOADER_PLUS_DIRECTIVE
         g_appletHeapSize = 0x800000;
+    #else
+        g_appletHeapSize = 0x600000;
+    #endif
         g_appletHeapReservationSize = 0x00;
         setsysExit();
     }
