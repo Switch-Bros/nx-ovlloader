@@ -325,15 +325,22 @@ void loadNro(void)
     
     // Fill entries efficiently
     entries[0].Value[0] = envGetMainThreadHandle();
+    // ProcessHandle
     entries[1].Value[0] = g_procHandle;
+    // OverrideHeap
     entries[3].Value[0] = nro_heap_start;
     entries[3].Value[1] = nro_heap_size;
+    // Argv
     entries[4].Value[1] = (u64) &g_argv[0];
+    // NextLoadPath
     entries[5].Value[0] = (u64) &g_nextNroPath[0];
     entries[5].Value[1] = (u64) &g_nextArgv[0];
+    // LastLoadResult
     entries[6].Value[0] = g_lastRet;
+    // RandomSeed
     entries[8].Value[0] = randomGet64();
     entries[8].Value[1] = randomGet64();
+    // HosVersion
     entries[10].Value[0] = hosversionGet();
 
     g_nroAddr = map_addr;
