@@ -322,11 +322,7 @@ void loadNro(void)
         { EntryType_HosVersion,           0, {0, 0} },
         { EntryType_EndOfList,            0, {(u64)(uintptr_t)g_noticeText, sizeof(g_noticeText)} }
     };
-
-    // Batch random generation for efficiency
-    u64 random1 = randomGet64();
-    u64 random2 = randomGet64();
-
+    
     // Fill entries efficiently
     entries[0].Value[0] = envGetMainThreadHandle();
     entries[1].Value[0] = g_procHandle;
@@ -336,8 +332,8 @@ void loadNro(void)
     entries[5].Value[0] = (u64) &g_nextNroPath[0];
     entries[5].Value[1] = (u64) &g_nextArgv[0];
     entries[6].Value[0] = g_lastRet;
-    entries[8].Value[0] = random1;
-    entries[8].Value[1] = random2;
+    entries[8].Value[0] = randomGet64();
+    entries[8].Value[1] = randomGet64();
     entries[10].Value[0] = hosversionGet();
 
     g_nroAddr = map_addr;
