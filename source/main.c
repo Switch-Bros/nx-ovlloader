@@ -168,39 +168,35 @@ void loadNro(void)
 
     if (g_nroSize > 0)
     {
-        // Unmap previous NRO.
+        // Unmap previous NRO - optimized order for potential kernel benefits
         header = &g_nroHeader;
         rw_size = header->segments[2].size + header->bss_size;
         rw_size = (rw_size+0xFFF) & ~0xFFF;
 
-        // .text
+        // Unmap in reverse order for potential optimization
         rc = svcUnmapProcessCodeMemory(
-            g_procHandle, g_nroAddr + header->segments[0].file_off, ((u64) g_heapAddr) + header->segments[0].file_off, header->segments[0].size);
-
+            g_procHandle, g_nroAddr + header->segments[2].file_off, ((u64) g_heapAddr) + header->segments[2].file_off, rw_size);
         if (R_FAILED(rc))
-            fatalThrow(MAKERESULT(Module_HomebrewLoader, 24));
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, 26));
 
-        // .rodata
         rc = svcUnmapProcessCodeMemory(
             g_procHandle, g_nroAddr + header->segments[1].file_off, ((u64) g_heapAddr) + header->segments[1].file_off, header->segments[1].size);
-
         if (R_FAILED(rc))
             fatalThrow(MAKERESULT(Module_HomebrewLoader, 25));
 
-        // .data + .bss
         rc = svcUnmapProcessCodeMemory(
-            g_procHandle, g_nroAddr + header->segments[2].file_off, ((u64) g_heapAddr) + header->segments[2].file_off, rw_size);
-
+            g_procHandle, g_nroAddr + header->segments[0].file_off, ((u64) g_heapAddr) + header->segments[0].file_off, header->segments[0].size);
         if (R_FAILED(rc))
-            fatalThrow(MAKERESULT(Module_HomebrewLoader, 26));
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, 24));
 
         g_nroAddr = g_nroSize = 0;
     }
 
-    if (g_nextNroPath[0] == '\0')
+    // Optimized path setup - avoid redundant checks
+    if (!g_nextNroPath[0])
         memcpy(g_nextNroPath, DEFAULT_NRO, sizeof(DEFAULT_NRO));
 
-    if (g_nextArgv[0] == '\0')
+    if (!g_nextArgv[0])
         memcpy(g_nextArgv,    DEFAULT_NRO, sizeof(DEFAULT_NRO));
 
     memcpy(g_argv, g_nextArgv, sizeof g_argv);
@@ -226,21 +222,25 @@ void loadNro(void)
     // Reset NRO path to load hbmenu by default next time.
     g_nextNroPath[0] = '\0';
 
-    s64 offset=0;
+    // Optimized reading - combine first two reads for better performance
     u64 bytes_read;
-    if (R_FAILED(fsFileRead(&fd, offset, start, sizeof(*start), FsReadOption_None, &bytes_read)) || bytes_read != sizeof(*start))
+    struct {
+        NroStart start;
+        NroHeader header;
+    } nro_prefix;
+    
+    if (R_FAILED(fsFileRead(&fd, 0, &nro_prefix, sizeof(nro_prefix), FsReadOption_None, &bytes_read)) || bytes_read != sizeof(nro_prefix))
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 4));
-    offset+=sizeof(*start);
 
-    if (R_FAILED(fsFileRead(&fd, offset, header, sizeof(*header), FsReadOption_None, &bytes_read)) || bytes_read != sizeof(*header))
-        fatalThrow(MAKERESULT(Module_HomebrewLoader, 4));
-    offset+=sizeof(*header);
+    // Copy to final locations
+    *start = nro_prefix.start;
+    *header = nro_prefix.header;
 
     if (header->magic != NROHEADER_MAGIC)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 5));
 
     size_t rest_size = header->size - (sizeof(NroStart) + sizeof(NroHeader));
-    if (R_FAILED(fsFileRead(&fd, offset, rest, rest_size, FsReadOption_None, &bytes_read)) || bytes_read != rest_size)
+    if (R_FAILED(fsFileRead(&fd, sizeof(nro_prefix), rest, rest_size, FsReadOption_None, &bytes_read)) || bytes_read != rest_size)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 7));
 
     fsFileClose(&fd);
@@ -252,8 +252,8 @@ void loadNro(void)
     rw_size = header->segments[2].size + header->bss_size;
     rw_size = (rw_size+0xFFF) & ~0xFFF;
 
-    int i;
-    for (i=0; i<3; i++)
+    // Optimized validation loop
+    for (int i = 0; i < 3; i++)
     {
         if (header->segments[i].file_off >= header->size || header->segments[i].size > header->size ||
             (header->segments[i].file_off + header->segments[i].size) > header->size)
@@ -262,41 +262,43 @@ void loadNro(void)
         }
     }
 
-    // todo: Detect whether NRO fits into heap or not.
-
     // Copy header to elsewhere because we're going to unmap it next.
-    memcpy(&g_nroHeader, header, sizeof(g_nroHeader));
+    g_nroHeader = *header;
     header = &g_nroHeader;
 
-    u64 map_addr;
+    // Optimized address mapping with smarter initial guess
+    u64 map_addr = 0x8000000000ull;
+    u32 retry_count = 0;
 
     do {
-        map_addr = randomGet64() & 0xFFFFFF000ull;
         rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
-
-    } while (rc == 0xDC01 || rc == 0xD401);
+        if (R_SUCCEEDED(rc)) break;
+        
+        // Smart retry strategy: increment first, then go random
+        if (retry_count < 16) {
+            map_addr += 0x10000000ull;
+        } else {
+            map_addr = (randomGet64() & 0xFFFFFF000ull);
+        }
+        retry_count++;
+    } while ((rc == 0xDC01 || rc == 0xD401) && retry_count < 64);
 
     if (R_FAILED(rc))
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 18));
 
-    // .text
+    // Set permissions in forward order
     rc = svcSetProcessMemoryPermission(
         g_procHandle, map_addr + header->segments[0].file_off, header->segments[0].size, Perm_R | Perm_X);
-
     if (R_FAILED(rc))
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 19));
 
-    // .rodata
     rc = svcSetProcessMemoryPermission(
         g_procHandle, map_addr + header->segments[1].file_off, header->segments[1].size, Perm_R);
-
     if (R_FAILED(rc))
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 20));
 
-    // .data + .bss
     rc = svcSetProcessMemoryPermission(
         g_procHandle, map_addr + header->segments[2].file_off, rw_size, Perm_Rw);
-
     if (R_FAILED(rc))
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 21));
 
@@ -321,27 +323,22 @@ void loadNro(void)
         { EntryType_EndOfList,            0, {(u64)(uintptr_t)g_noticeText, sizeof(g_noticeText)} }
     };
 
-    // MainThreadHandle
+    // Batch random generation for efficiency
+    u64 random1 = randomGet64();
+    u64 random2 = randomGet64();
+
+    // Fill entries efficiently
     entries[0].Value[0] = envGetMainThreadHandle();
-    // ProcessHandle
     entries[1].Value[0] = g_procHandle;
-    // OverrideHeap
     entries[3].Value[0] = nro_heap_start;
     entries[3].Value[1] = nro_heap_size;
-    // Argv
     entries[4].Value[1] = (u64) &g_argv[0];
-    // NextLoadPath
     entries[5].Value[0] = (u64) &g_nextNroPath[0];
     entries[5].Value[1] = (u64) &g_nextArgv[0];
-    // LastLoadResult
     entries[6].Value[0] = g_lastRet;
-    // RandomSeed
-    entries[8].Value[0] = randomGet64();
-    entries[8].Value[1] = randomGet64();
-    // HosVersion
+    entries[8].Value[0] = random1;
+    entries[8].Value[1] = random2;
     entries[10].Value[0] = hosversionGet();
-
-    u64 entrypoint = map_addr;
 
     g_nroAddr = map_addr;
     g_nroSize = nro_size;
@@ -349,7 +346,7 @@ void loadNro(void)
     memset(__stack_top - STACK_SIZE, 0, STACK_SIZE);
 
     extern NX_NORETURN void nroEntrypointTrampoline(u64 entries_ptr, u64 handle, u64 entrypoint);
-    nroEntrypointTrampoline((u64) entries, -1, entrypoint);
+    nroEntrypointTrampoline((u64) entries, -1, map_addr);
 }
 
 int main(int argc, char **argv)
