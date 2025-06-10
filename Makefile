@@ -42,7 +42,7 @@ BUILD		:=	build
 SOURCES		:=	source
 DATA		:=	data
 INCLUDES	:=	include
-APP_VERSION	:=	1.1.0
+APP_VERSION	:=	1.1.1
 
 #ifeq ($(RELEASE),)
 #	APP_VERSION	:=	$(APP_VERSION)-$(shell git describe --dirty --always)
