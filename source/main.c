@@ -17,9 +17,9 @@ const char g_noticeText[] =
     "What's the most resilient parasite? A bacteria? A virus? An intestinal worm? An idea. Resilient, highly contagious.";
 #endif
 
-static char g_argv[2048];
-static char g_nextArgv[2048];
-static char g_nextNroPath[512];
+static char g_argv[512]; // reduced
+static char g_nextArgv[512]; // reduced
+static char g_nextNroPath[256]; // reduced
 u64  g_nroAddr = 0;
 static u64  g_nroSize = 0;
 static NroHeader g_nroHeader;
@@ -40,7 +40,7 @@ bool __nx_fsdev_support_cwd = false;
 Result g_lastRet = 0;
 
 extern void* __stack_top; // Defined in libnx.
-#define STACK_SIZE 0x10000 // Change this if main-thread stack size ever changes.
+#define STACK_SIZE 0x1000 // Change this if main-thread stack size ever changes.
 
 void __libnx_initheap(void)
 {
@@ -116,7 +116,7 @@ static void procHandleReceiveThread(void* arg)
     void* base = armGetTls();
     hipcMakeRequestInline(base);
 
-    s32 idx = 0;
+    s32 idx;
     rc = svcReplyAndReceive(&idx, &session, 1, INVALID_HANDLE, UINT64_MAX);
     if (R_FAILED(rc))
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 15));
