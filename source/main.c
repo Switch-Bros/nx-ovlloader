@@ -243,7 +243,7 @@ void loadNro(void)
     size_t rest_size = header->size - (sizeof(NroStart) + sizeof(NroHeader));
     if (R_FAILED(fsFileRead(&fd, sizeof(nro_prefix), rest, rest_size, FsReadOption_None, &bytes_read)) || bytes_read != rest_size)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 7));
-
+    
     fsFileClose(&fd);
     fsFsClose(&sdmc);
 
