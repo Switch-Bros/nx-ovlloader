@@ -164,7 +164,7 @@ void loadNro(void)
     size_t rw_size;
     Result rc;
 
-    memcpy((u8*)armGetTls() + 0x100, g_savedTls, 0x100);
+    __builtin_memcpy((u8*)armGetTls() + 0x100, g_savedTls, 0x100);
 
     if (g_nroSize > 0)
     {
@@ -195,12 +195,12 @@ void loadNro(void)
     }
 
     if (!g_nextNroPath[0])
-        memcpy(g_nextNroPath, DEFAULT_NRO, sizeof(DEFAULT_NRO));
+        __builtin_memcpy(g_nextNroPath, DEFAULT_NRO, sizeof(DEFAULT_NRO));
 
     if (!g_nextArgv[0])
-        memcpy(g_nextArgv,    DEFAULT_NRO, sizeof(DEFAULT_NRO));
+        __builtin_memcpy(g_nextArgv,    DEFAULT_NRO, sizeof(DEFAULT_NRO));
 
-    memcpy(g_argv, g_nextArgv, sizeof g_argv);
+    __builtin_memcpy(g_argv, g_nextArgv, sizeof g_argv);
 
     uint8_t *nrobuf = (uint8_t*) g_heapAddr;
 
@@ -338,7 +338,7 @@ void loadNro(void)
     g_nroAddr = map_addr;
     g_nroSize = nro_size;
 
-    memset(__stack_top - STACK_SIZE, 0, STACK_SIZE);
+    __builtin_memset(__stack_top - STACK_SIZE, 0, STACK_SIZE);
 
     extern NX_NORETURN void nroEntrypointTrampoline(u64 entries_ptr, u64 handle, u64 entrypoint);
     nroEntrypointTrampoline((u64) entries, -1, map_addr);
@@ -349,7 +349,7 @@ int main(int argc, char **argv)
     //if (hosversionBefore(9,0,0)) no one uses hos before 9.0.0 anymore. remove unnecessary check
     //    exit(1);
 
-    memcpy(g_savedTls, (u8*)armGetTls() + 0x100, 0x100);
+    __builtin_memcpy(g_savedTls, (u8*)armGetTls() + 0x100, 0x100);
 
     setupHbHeap();
     getOwnProcessHandle();
