@@ -346,7 +346,7 @@ void loadNro(void)
 
 int main(int argc, char **argv)
 {
-    //if (hosversionBefore(9,0,0))
+    //if (hosversionBefore(9,0,0)) no one uses hos before 9.0.0 anymore. remove unnecessary check
     //    exit(1);
 
     memcpy(g_savedTls, (u8*)armGetTls() + 0x100, 0x100);
