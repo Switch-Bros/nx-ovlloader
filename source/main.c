@@ -161,8 +161,8 @@ static void getOwnProcessHandle(void)
 void loadNro(void)
 {
     NroHeader* header = NULL;
-    size_t rw_size=0;
-    Result rc=0;
+    size_t rw_size;
+    Result rc;
 
     memcpy((u8*)armGetTls() + 0x100, g_savedTls, 0x100);
 
@@ -346,8 +346,8 @@ void loadNro(void)
 
 int main(int argc, char **argv)
 {
-    if (hosversionBefore(9,0,0))
-        exit(1);
+    //if (hosversionBefore(9,0,0))
+    //    exit(1);
 
     memcpy(g_savedTls, (u8*)armGetTls() + 0x100, 0x100);
 
