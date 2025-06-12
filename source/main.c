@@ -2,7 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <fcntl.h>
+#include <fcntl.h>jn                                                                                                                                                                                  
 #include <unistd.h>
 
 #define DEFAULT_NRO "sdmc:/switch/.overlays/ovlmenu.ovl"
@@ -40,7 +40,7 @@ bool __nx_fsdev_support_cwd = false;
 Result g_lastRet = 0;
 
 extern void* __stack_top; // Defined in libnx.
-#define STACK_SIZE 0x1000 // Change this if main-thread stack size ever changes.
+#define STACK_SIZE 0x10000 // Change this if main-thread stack size ever changes.
 
 void __libnx_initheap(void)
 {
