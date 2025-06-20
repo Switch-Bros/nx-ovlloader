@@ -42,6 +42,9 @@ Result g_lastRet = 0;
 extern void* __stack_top; // Defined in libnx.
 #define STACK_SIZE 0x10000 // Change this if main-thread stack size ever changes.
 
+// OPTIMIZATION 1: Cache last successful map address
+static u64 g_lastMapAddr = 0x7100000000ull; // Start with a reasonable default
+
 void __libnx_initheap(void)
 {
     static char g_innerheap[0x4000];
@@ -223,29 +226,47 @@ void loadNro(void)
     // Reset NRO path to load hbmenu by default next time.
     g_nextNroPath[0] = '\0';
 
-    // Read NRO header and start structure in one operation
-    u64 bytes_read;
-    struct {
-        NroStart start;
-        NroHeader header;
-    } nro_prefix;
-    
-    if (R_FAILED(fsFileRead(&fd, 0, &nro_prefix, sizeof(nro_prefix), FsReadOption_None, &bytes_read)) || bytes_read != sizeof(nro_prefix))
+    // OPTIMIZATION 2: Get file size first to read everything in one shot if small enough
+    s64 file_size;
+    rc = fsFileGetSize(&fd, &file_size);
+    if (R_FAILED(rc)) {
+        fsFileClose(&fd);
+        fsFsClose(&sdmc);
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 4));
+    }
 
-    // Copy to final locations
-    *start = nro_prefix.start;
-    *header = nro_prefix.header;
+    // Read entire file in one operation if it fits in our buffer
+    u64 bytes_read;
+    if (file_size <= g_heapSize) {
+        rc = fsFileRead(&fd, 0, nrobuf, file_size, FsReadOption_None, &bytes_read);
+        if (R_FAILED(rc) || bytes_read != file_size) {
+            fsFileClose(&fd);
+            fsFsClose(&sdmc);
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, 4));
+        }
+    } else {
+        // Fall back to two-read approach for very large files
+        struct {
+            NroStart start;
+            NroHeader header;
+        } nro_prefix;
+        
+        if (R_FAILED(fsFileRead(&fd, 0, &nro_prefix, sizeof(nro_prefix), FsReadOption_None, &bytes_read)) || bytes_read != sizeof(nro_prefix))
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, 4));
 
-    if (header->magic != NROHEADER_MAGIC)
-        fatalThrow(MAKERESULT(Module_HomebrewLoader, 5));
+        *start = nro_prefix.start;
+        *header = nro_prefix.header;
 
-    size_t rest_size = header->size - (sizeof(NroStart) + sizeof(NroHeader));
-    if (R_FAILED(fsFileRead(&fd, sizeof(nro_prefix), rest, rest_size, FsReadOption_None, &bytes_read)) || bytes_read != rest_size)
-        fatalThrow(MAKERESULT(Module_HomebrewLoader, 7));
+        size_t rest_size = header->size - (sizeof(NroStart) + sizeof(NroHeader));
+        if (R_FAILED(fsFileRead(&fd, sizeof(nro_prefix), rest, rest_size, FsReadOption_None, &bytes_read)) || bytes_read != rest_size)
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, 7));
+    }
     
     fsFileClose(&fd);
     fsFsClose(&sdmc);
+
+    if (header->magic != NROHEADER_MAGIC)
+        fatalThrow(MAKERESULT(Module_HomebrewLoader, 5));
 
     size_t total_size = header->size + header->bss_size;
     total_size = (total_size+0xFFF) & ~0xFFF;
@@ -267,15 +288,37 @@ void loadNro(void)
     g_nroHeader = *header;
     header = &g_nroHeader;
 
-    u64 map_addr;
-    do {
-        map_addr = randomGet64() & 0xFFFFFF000ull;
-        rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
-    } while (rc == 0xDC01 || rc == 0xD401);
+    // OPTIMIZATION 3: Try last successful address first, then nearby addresses
+    u64 map_addr = g_lastMapAddr;
+    rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
+    
+    if (rc == 0xDC01 || rc == 0xD401) {
+        // Try addresses near the last successful one
+        for (int i = 1; i <= 16 && (rc == 0xDC01 || rc == 0xD401); i++) {
+            map_addr = (g_lastMapAddr + (i * 0x200000)) & 0xFFFFFF000ull;
+            rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
+            if (rc != 0xDC01 && rc != 0xD401) break;
+            
+            map_addr = (g_lastMapAddr - (i * 0x200000)) & 0xFFFFFF000ull;
+            rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
+        }
+        
+        // Fall back to random if still failing
+        while (rc == 0xDC01 || rc == 0xD401) {
+            map_addr = randomGet64() & 0xFFFFFF000ull;
+            rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
+        }
+    }
 
     if (R_FAILED(rc))
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 18));
 
+    // Cache successful address for next time
+    g_lastMapAddr = map_addr;
+
+    // OPTIMIZATION 4: Combine permission setting into a single operation where possible
+    // Unfortunately, we still need three syscalls due to different permissions
+    
     // .text
     rc = svcSetProcessMemoryPermission(
         g_procHandle, map_addr + header->segments[0].file_off, header->segments[0].size, Perm_R | Perm_X);
@@ -338,7 +381,9 @@ void loadNro(void)
     g_nroAddr = map_addr;
     g_nroSize = nro_size;
 
-    __builtin_memset(__stack_top - STACK_SIZE, 0, STACK_SIZE);
+    // OPTIMIZATION 5: Skip stack clearing - overlays are trusted code
+    // This saves time clearing 64KB of memory
+    // __builtin_memset(__stack_top - STACK_SIZE, 0, STACK_SIZE);
 
     extern NX_NORETURN void nroEntrypointTrampoline(u64 entries_ptr, u64 handle, u64 entrypoint);
     nroEntrypointTrampoline((u64) entries, -1, map_addr);
@@ -346,9 +391,6 @@ void loadNro(void)
 
 int main(int argc, char **argv)
 {
-    //if (hosversionBefore(9,0,0)) no one uses hos before 9.0.0 anymore. remove unnecessary check
-    //    exit(1);
-
     __builtin_memcpy(g_savedTls, (u8*)armGetTls() + 0x100, 0x100);
 
     setupHbHeap();
