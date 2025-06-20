@@ -2,7 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <fcntl.h>jn                                                                                                                                                                                  
+#include <fcntl.h>
 #include <unistd.h>
 
 #define DEFAULT_NRO "sdmc:/switch/.overlays/ovlmenu.ovl"
