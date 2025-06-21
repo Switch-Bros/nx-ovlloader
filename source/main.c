@@ -206,7 +206,7 @@ void loadNro(void)
 
     NroStart*  start  = (NroStart*)  (nrobuf + 0);
     header = (NroHeader*) (nrobuf + sizeof(NroStart));
-    uint8_t*   rest   = (uint8_t*)   (nrobuf + sizeof(NroStart) + sizeof(NroHeader));
+    //uint8_t*   rest   = (uint8_t*)   (nrobuf + sizeof(NroStart) + sizeof(NroHeader));
     
     FsFileSystem sdmc;
     rc = fsOpenSdCardFileSystem(&sdmc);
@@ -223,26 +223,21 @@ void loadNro(void)
     // Reset NRO path to load hbmenu by default next time.
     g_nextNroPath[0] = '\0';
 
-    // Read NRO header and start structure in one operation
-    u64 bytes_read;
-    struct {
-        NroStart start;
-        NroHeader header;
-    } nro_prefix;
+    // Get file size and read entire file at once
+    s64 file_size;
+    if (R_FAILED(fsFileGetSize(&fd, &file_size)))
+        fatalThrow(MAKERESULT(Module_HomebrewLoader, 4));
     
-    if (R_FAILED(fsFileRead(&fd, 0, &nro_prefix, sizeof(nro_prefix), FsReadOption_None, &bytes_read)) || bytes_read != sizeof(nro_prefix))
+    u64 bytes_read;
+    if (R_FAILED(fsFileRead(&fd, 0, nrobuf, file_size, FsReadOption_None, &bytes_read)) || bytes_read != file_size)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 4));
 
     // Copy to final locations
-    *start = nro_prefix.start;
-    *header = nro_prefix.header;
+    *start = *(NroStart*)nrobuf;
+    *header = *(NroHeader*)(nrobuf + sizeof(NroStart));
 
     if (header->magic != NROHEADER_MAGIC)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 5));
-
-    size_t rest_size = header->size - (sizeof(NroStart) + sizeof(NroHeader));
-    if (R_FAILED(fsFileRead(&fd, sizeof(nro_prefix), rest, rest_size, FsReadOption_None, &bytes_read)) || bytes_read != rest_size)
-        fatalThrow(MAKERESULT(Module_HomebrewLoader, 7));
     
     fsFileClose(&fd);
     fsFsClose(&sdmc);
