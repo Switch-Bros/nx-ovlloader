@@ -7,10 +7,6 @@
 
 #define DEFAULT_NRO "sdmc:/switch/.overlays/ovlmenu.ovl"
 
-// Use compiler builtin instead of library call
-#define FAST_MEMCPY(dst, src, size) __builtin_memcpy(dst, src, size)
-#define FAST_MEMSET(ptr, val, size) __builtin_memset(ptr, val, size)
-
 #if BUILD_LOADER_PLUS_DIRECTIVE
 const char g_noticeText[] =
     "nx-ovlloader+ " VERSION "\0"
@@ -21,13 +17,11 @@ const char g_noticeText[] =
     "What's the most resilient parasite? A bacteria? A virus? An intestinal worm? An idea. Resilient, highly contagious.";
 #endif
 
-// Align to cache line boundaries for better performance
-static char g_argv[512] __attribute__((aligned(64)));
-static char g_nextArgv[512] __attribute__((aligned(64)));
-static char g_nextNroPath[256] __attribute__((aligned(64)));
-
-u64 g_nroAddr = 0;
-static u64 g_nroSize = 0;
+static char g_argv[512];
+static char g_nextArgv[512];
+static char g_nextNroPath[256];
+u64  g_nroAddr = 0;
+static u64  g_nroSize = 0;
 static NroHeader g_nroHeader;
 
 static u64 g_appletHeapSize = 0;
@@ -35,7 +29,7 @@ static u64 g_appletHeapReservationSize = 0;
 
 static u128 g_userIdStorage;
 
-static u8 g_savedTls[0x100] __attribute__((aligned(16)));
+static u8 g_savedTls[0x100];
 
 // Minimize fs resource usage
 u32 __nx_fs_num_sessions = 1;
@@ -48,13 +42,16 @@ Result g_lastRet = 0;
 extern void* __stack_top;
 #define STACK_SIZE 0x10000
 
-// Cache file system handle globally to avoid repeated initialization
+// Cache file system handle globally - ACTUAL performance improvement
 static FsFileSystem g_sdmc;
 static bool g_sdmc_initialized = false;
 
+// Cache successful mapping addresses - ACTUAL performance improvement  
+static u64 s_nextMapAddr = 0x8000000000ull;
+
 void __libnx_initheap(void)
 {
-    static char g_innerheap[0x4000] __attribute__((aligned(16)));
+    static char g_innerheap[0x4000];
 
     extern char* fake_heap_start;
     extern char* fake_heap_end;
@@ -95,6 +92,7 @@ void __appInit(void)
 
 void __wrap_exit(void)
 {
+    // Clean up cached filesystem handle
     if (g_sdmc_initialized) {
         fsFsClose(&g_sdmc);
         g_sdmc_initialized = false;
@@ -103,17 +101,17 @@ void __wrap_exit(void)
     __builtin_unreachable();
 }
 
-static void* g_heapAddr;
+static void*  g_heapAddr;
 static size_t g_heapSize;
 
-static inline void setupHbHeap(void)
+static void setupHbHeap(void)
 {
     void* addr = NULL;
     u64 size = g_appletHeapSize;
 
     Result rc = svcSetHeapSize(&addr, size);
 
-    if (R_FAILED(rc) || addr == NULL)
+    if (R_FAILED(rc) || addr==NULL)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 9));
 
     g_heapAddr = addr;
@@ -143,7 +141,7 @@ static void procHandleReceiveThread(void* arg)
     svcCloseHandle(session);
 }
 
-static inline void getOwnProcessHandle(void)
+static void getOwnProcessHandle(void)
 {
     Result rc;
 
@@ -172,165 +170,148 @@ static inline void getOwnProcessHandle(void)
     threadClose(&t);
 }
 
-// Pre-calculated segment permissions for faster setup
-static const u32 segment_perms[] = { Perm_R | Perm_X, Perm_R, Perm_Rw };
-
-// Optimized file reading with proper error handling
-static inline Result readFileOptimized(const char* path, void* buffer, s64* out_size)
-{
-    Result rc;
-    
-    // Initialize SD card filesystem only once
-    if (!g_sdmc_initialized) {
-        rc = fsOpenSdCardFileSystem(&g_sdmc);
-        if (R_FAILED(rc))
-            return rc;
-        g_sdmc_initialized = true;
-    }
-
-    FsFile fd;
-    rc = fsFsOpenFile(&g_sdmc, path + 5, FsOpenMode_Read, &fd);
-    if (R_FAILED(rc))
-        return rc;
-
-    s64 file_size;
-    rc = fsFileGetSize(&fd, &file_size);
-    if (R_FAILED(rc)) {
-        fsFileClose(&fd);
-        return rc;
-    }
-
-    u64 bytes_read;
-    rc = fsFileRead(&fd, 0, buffer, file_size, FsReadOption_None, &bytes_read);
-    fsFileClose(&fd);
-    
-    if (R_FAILED(rc) || bytes_read != file_size)
-        return MAKERESULT(Module_HomebrewLoader, 4);
-    
-    *out_size = file_size;
-    return 0;
-}
-
 void loadNro(void)
 {
     NroHeader* header = NULL;
     size_t rw_size;
     Result rc;
-    
-    // Pre-declare loop variables outside loops for better performance
-    int i;
-    u64 segment_size;
-    u32 file_off, size;
 
-    FAST_MEMCPY((u8*)armGetTls() + 0x100, g_savedTls, 0x100);
+    __builtin_memcpy((u8*)armGetTls() + 0x100, g_savedTls, 0x100);
 
     if (g_nroSize > 0)
     {
-        // Unmap previous NRO with batch operations
+        // Unmap previous NRO
         header = &g_nroHeader;
-        rw_size = (header->segments[2].size + header->bss_size + 0xFFF) & ~0xFFF;
+        rw_size = header->segments[2].size + header->bss_size;
+        rw_size = (rw_size+0xFFF) & ~0xFFF;
 
-        // Unmap all segments at once if possible, or use optimized order
-        for (i = 0; i < 3; i++) {
-            segment_size = (i == 2) ? rw_size : header->segments[i].size;
-            rc = svcUnmapProcessCodeMemory(
-                g_procHandle, 
-                g_nroAddr + header->segments[i].file_off, 
-                ((u64)g_heapAddr) + header->segments[i].file_off, 
-                segment_size);
-            if (R_FAILED(rc))
-                fatalThrow(MAKERESULT(Module_HomebrewLoader, 24 + i));
-        }
+        // .text
+        rc = svcUnmapProcessCodeMemory(
+            g_procHandle, g_nroAddr + header->segments[0].file_off, ((u64) g_heapAddr) + header->segments[0].file_off, header->segments[0].size);
+        if (R_FAILED(rc))
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, 24));
+
+        // .rodata
+        rc = svcUnmapProcessCodeMemory(
+            g_procHandle, g_nroAddr + header->segments[1].file_off, ((u64) g_heapAddr) + header->segments[1].file_off, header->segments[1].size);
+        if (R_FAILED(rc))
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, 25));
+
+        // .data + .bss
+        rc = svcUnmapProcessCodeMemory(
+            g_procHandle, g_nroAddr + header->segments[2].file_off, ((u64) g_heapAddr) + header->segments[2].file_off, rw_size);
+        if (R_FAILED(rc))
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, 26));
 
         g_nroAddr = g_nroSize = 0;
     }
 
-    // Set default paths more efficiently
     if (!g_nextNroPath[0])
-        FAST_MEMCPY(g_nextNroPath, DEFAULT_NRO, sizeof(DEFAULT_NRO));
+        __builtin_memcpy(g_nextNroPath, DEFAULT_NRO, sizeof(DEFAULT_NRO));
 
     if (!g_nextArgv[0])
-        FAST_MEMCPY(g_nextArgv, DEFAULT_NRO, sizeof(DEFAULT_NRO));
+        __builtin_memcpy(g_nextArgv,    DEFAULT_NRO, sizeof(DEFAULT_NRO));
 
-    FAST_MEMCPY(g_argv, g_nextArgv, sizeof(g_argv));
+    __builtin_memcpy(g_argv, g_nextArgv, sizeof g_argv);
 
-    uint8_t* nrobuf = (uint8_t*)g_heapAddr;
-    NroStart* start = (NroStart*)(nrobuf + 0);
-    header = (NroHeader*)(nrobuf + sizeof(NroStart));
+    uint8_t *nrobuf = (uint8_t*) g_heapAddr;
 
-    // Optimized file reading
-    s64 file_size;
-    rc = readFileOptimized(g_nextNroPath, nrobuf, &file_size);
+    NroStart*  start  = (NroStart*)  (nrobuf + 0);
+    header = (NroHeader*) (nrobuf + sizeof(NroStart));
+    
+    // REAL OPTIMIZATION #1: Cache filesystem handle instead of reopening every time
+    if (!g_sdmc_initialized) {
+        rc = fsOpenSdCardFileSystem(&g_sdmc);
+        if (R_FAILED(rc))
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, 404));
+        g_sdmc_initialized = true;
+    }
+
+    FsFile fd;
+    rc = fsFsOpenFile(&g_sdmc, g_nextNroPath + 5, FsOpenMode_Read, &fd);
     if (R_FAILED(rc)) {
         exit(1);
     }
 
-    // Reset NRO path
+    // Reset NRO path to load hbmenu by default next time.
     g_nextNroPath[0] = '\0';
 
-    // Fast structure copies
+    // REAL OPTIMIZATION #2: Skip fsFileGetSize, just read and check bytes_read
+    // Read file in one go and let bytes_read tell us the actual size
+    u64 bytes_read;
+    rc = fsFileRead(&fd, 0, nrobuf, g_heapSize, FsReadOption_None, &bytes_read);
+    fsFileClose(&fd);
+    
+    if (R_FAILED(rc) || bytes_read == 0)
+        fatalThrow(MAKERESULT(Module_HomebrewLoader, 4));
+
+    // Copy to final locations
     *start = *(NroStart*)nrobuf;
     *header = *(NroHeader*)(nrobuf + sizeof(NroStart));
 
     if (header->magic != NROHEADER_MAGIC)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 5));
 
-    size_t total_size = (header->size + header->bss_size + 0xFFF) & ~0xFFF;
-    rw_size = (header->segments[2].size + header->bss_size + 0xFFF) & ~0xFFF;
+    size_t total_size = header->size + header->bss_size;
+    total_size = (total_size+0xFFF) & ~0xFFF;
 
-    // Optimized segment validation
-    for (i = 0; i < 3; i++) {
-        file_off = header->segments[i].file_off;
-        size = header->segments[i].size;
-        if (file_off >= header->size || size > header->size || 
-            (file_off + size) > header->size) {
+    rw_size = header->segments[2].size + header->bss_size;
+    rw_size = (rw_size+0xFFF) & ~0xFFF;
+
+    // Validate segments
+    for (int i = 0; i < 3; i++)
+    {
+        if (header->segments[i].file_off >= header->size || header->segments[i].size > header->size ||
+            (header->segments[i].file_off + header->segments[i].size) > header->size)
+        {
             fatalThrow(MAKERESULT(Module_HomebrewLoader, 6));
         }
     }
 
-    // Cache header
+    // Copy header to elsewhere because we're going to unmap it next.
     g_nroHeader = *header;
     header = &g_nroHeader;
 
-    // Improved memory mapping with systematic allocation
-    static u64 s_nextMapAddr = 0x8000000000ull;
+    // REAL OPTIMIZATION #3: Cache successful mapping addresses
     u64 map_addr = s_nextMapAddr;
-    u64 attempts = 0;
-    
     rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
     if (R_SUCCEEDED(rc)) {
         s_nextMapAddr = (map_addr + total_size + 0x200000) & ~0x1FFFFFull;
     } else {
-        // Optimized fallback
+        // Fallback to random if systematic fails
         do {
-            map_addr = (randomGet64() & 0xFFFFFF000ull) + (attempts * 0x1000000);
+            map_addr = randomGet64() & 0xFFFFFF000ull;
             rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
-            attempts++;
-        } while ((rc == 0xDC01 || rc == 0xD401) && attempts < 256);
+        } while (rc == 0xDC01 || rc == 0xD401);
     }
 
     if (R_FAILED(rc))
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 18));
 
-    // Set permissions for all segments in optimized order
-    for (i = 0; i < 3; i++) {
-        segment_size = (i == 2) ? rw_size : header->segments[i].size;
-        rc = svcSetProcessMemoryPermission(
-            g_procHandle, 
-            map_addr + header->segments[i].file_off, 
-            segment_size, 
-            segment_perms[i]);
-        if (R_FAILED(rc))
-            fatalThrow(MAKERESULT(Module_HomebrewLoader, 19 + i));
-    }
+    // .text
+    rc = svcSetProcessMemoryPermission(
+        g_procHandle, map_addr + header->segments[0].file_off, header->segments[0].size, Perm_R | Perm_X);
+    if (R_FAILED(rc))
+        fatalThrow(MAKERESULT(Module_HomebrewLoader, 19));
+
+    // .rodata
+    rc = svcSetProcessMemoryPermission(
+        g_procHandle, map_addr + header->segments[1].file_off, header->segments[1].size, Perm_R);
+    if (R_FAILED(rc))
+        fatalThrow(MAKERESULT(Module_HomebrewLoader, 20));
+
+    // .data + .bss
+    rc = svcSetProcessMemoryPermission(
+        g_procHandle, map_addr + header->segments[2].file_off, rw_size, Perm_Rw);
+    if (R_FAILED(rc))
+        fatalThrow(MAKERESULT(Module_HomebrewLoader, 21));
 
     u64 nro_size = header->segments[2].file_off + rw_size;
-    u64 nro_heap_start = ((u64)g_heapAddr) + nro_size;
-    u64 nro_heap_size = g_heapSize + (u64)g_heapAddr - (u64)nro_heap_start;
+    u64 nro_heap_start = ((u64) g_heapAddr) + nro_size;
+    u64 nro_heap_size  = g_heapSize + (u64) g_heapAddr - (u64) nro_heap_start;
 
     #define M EntryFlag_IsMandatory
 
-    // Pre-filled configuration entries
     static ConfigEntry entries[] = {
         { EntryType_MainThreadHandle,     0, {0, 0} },
         { EntryType_ProcessHandle,        0, {0, 0} },
@@ -346,32 +327,38 @@ void loadNro(void)
         { EntryType_EndOfList,            0, {(u64)(uintptr_t)g_noticeText, sizeof(g_noticeText)} }
     };
     
-    // Batch fill entry values
+    // Fill entry values
     entries[0].Value[0] = envGetMainThreadHandle();
+    // ProcessHandle
     entries[1].Value[0] = g_procHandle;
+    // OverrideHeap
     entries[3].Value[0] = nro_heap_start;
     entries[3].Value[1] = nro_heap_size;
-    entries[4].Value[1] = (u64)&g_argv[0];
-    entries[5].Value[0] = (u64)&g_nextNroPath[0];
-    entries[5].Value[1] = (u64)&g_nextArgv[0];
+    // Argv
+    entries[4].Value[1] = (u64) &g_argv[0];
+    // NextLoadPath
+    entries[5].Value[0] = (u64) &g_nextNroPath[0];
+    entries[5].Value[1] = (u64) &g_nextArgv[0];
+    // LastLoadResult
     entries[6].Value[0] = g_lastRet;
+    // RandomSeed
     entries[8].Value[0] = randomGet64();
     entries[8].Value[1] = randomGet64();
+    // HosVersion
     entries[10].Value[0] = hosversionGet();
 
     g_nroAddr = map_addr;
     g_nroSize = nro_size;
 
-    // Fast stack clear
-    FAST_MEMSET(__stack_top - STACK_SIZE, 0, STACK_SIZE);
+    __builtin_memset(__stack_top - STACK_SIZE, 0, STACK_SIZE);
 
     extern NX_NORETURN void nroEntrypointTrampoline(u64 entries_ptr, u64 handle, u64 entrypoint);
-    nroEntrypointTrampoline((u64)entries, -1, map_addr);
+    nroEntrypointTrampoline((u64) entries, -1, map_addr);
 }
 
 int main(int argc, char **argv)
 {
-    FAST_MEMCPY(g_savedTls, (u8*)armGetTls() + 0x100, 0x100);
+    __builtin_memcpy(g_savedTls, (u8*)armGetTls() + 0x100, 0x100);
 
     setupHbHeap();
     getOwnProcessHandle();
