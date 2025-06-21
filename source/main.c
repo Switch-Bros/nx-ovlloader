@@ -246,8 +246,8 @@ void loadNro(void)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 4));
 
     // Copy to final locations
-    *start = *(NroStart*)nrobuf;
-    *header = *(NroHeader*)(nrobuf + sizeof(NroStart));
+    //*start = *(NroStart*)nrobuf;
+    //*header = *(NroHeader*)(nrobuf + sizeof(NroStart));
 
     if (header->magic != NROHEADER_MAGIC)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 5));
