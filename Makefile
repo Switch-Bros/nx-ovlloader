@@ -51,20 +51,28 @@ APP_VERSION	:=	1.1.1
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
-ARCH	:=	-march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE
+ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
-CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
+# Balanced performance compiler flags
+CFLAGS	:=	-g -Wall -O2 -ffunction-sections -fdata-sections \
+			-ffast-math -fomit-frame-pointer -fno-stack-protector \
+			-flto -ffat-lto-objects \
 			$(ARCH) $(DEFINES)
 
-CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DVERSION=\"v$(APP_VERSION)\"
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DVERSION=\"v$(APP_VERSION)\" -DNDEBUG
 
 BUILD_LOADER_PLUS_DIRECTIVE := 1
 CFLAGS += -DBUILD_LOADER_PLUS_DIRECTIVE=$(BUILD_LOADER_PLUS_DIRECTIVE)
 
-CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
+CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -fvisibility-inlines-hidden
 
 ASFLAGS	:=	-g $(ARCH)
-LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-wrap,exit -Wl,-Map,$(notdir $*.map)
+
+# Enhanced linker flags for performance
+LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) \
+			-Wl,-wrap,exit -Wl,-Map,$(notdir $*.map) \
+			-Wl,--gc-sections -Wl,--strip-all \
+			-flto -fuse-linker-plugin
 
 LIBS	:= -lnx
 
@@ -74,6 +82,10 @@ LIBS	:= -lnx
 #---------------------------------------------------------------------------------
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 
+#---------------------------------------------------------------------------------
+# Parallel build support
+#---------------------------------------------------------------------------------
+MAKEFLAGS += -j$(shell nproc 2>/dev/null || echo 4)
 
 #---------------------------------------------------------------------------------
 # no real need to edit anything past this point unless you need to add additional
@@ -176,8 +188,6 @@ $(BUILD):
 	@touch out/atmosphere/contents/420000000007E51A/flags/boot2.flag
 	@cp $(CURDIR)/toolbox.json out/atmosphere/contents/420000000007E51A/toolbox.json
 	@cp $(CURDIR)/$(TARGET).nsp out/atmosphere/contents/420000000007E51A/exefs.nsp
-
-
 
 #---------------------------------------------------------------------------------
 clean:
