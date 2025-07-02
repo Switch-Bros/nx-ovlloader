@@ -7,15 +7,13 @@
 
 #define DEFAULT_NRO "sdmc:/switch/.overlays/ovlmenu.ovl"
 
+const char g_noticeText[] =
+    "nx-ovlloader"
 #if BUILD_LOADER_PLUS_DIRECTIVE
-const char g_noticeText[] =
-    "nx-ovlloader+ " VERSION "\0"
-    "What's the most resilient parasite? A bacteria? A virus? An intestinal worm? An idea. Resilient, highly contagious.";
-#else
-const char g_noticeText[] =
-    "nx-ovlloader " VERSION "\0"
-    "What's the most resilient parasite? A bacteria? A virus? An intestinal worm? An idea. Resilient, highly contagious.";
+    "+"
 #endif
+    " " VERSION "\0"
+    "What gives an idea power? Its origin? Its truth? Its reach? No. Its ability to collapse, reassemble, and still mean the same thing.";
 
 static char g_argv[512];
 static char g_nextArgv[512];
