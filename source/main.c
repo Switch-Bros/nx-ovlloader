@@ -216,7 +216,7 @@ void loadNro(void)
 
     uint8_t *nrobuf = (uint8_t*) g_heapAddr;
 
-    NroStart*  start  = (NroStart*)  (nrobuf + 0);
+    //NroStart*  start  = (NroStart*)  (nrobuf + 0);
     header = (NroHeader*) (nrobuf + sizeof(NroStart));
     
     // REAL OPTIMIZATION #1: Cache filesystem handle instead of reopening every time
