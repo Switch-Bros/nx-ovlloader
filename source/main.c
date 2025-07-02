@@ -252,11 +252,9 @@ void loadNro(void)
     if (header->magic != NROHEADER_MAGIC)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 5));
 
-    size_t total_size = header->size + header->bss_size;
-    total_size = (total_size+0xFFF) & ~0xFFF;
+    size_t total_size = ((header->size + header->bss_size + 0xFFF) & ~0xFFF);
 
-    rw_size = header->segments[2].size + header->bss_size;
-    rw_size = (rw_size+0xFFF) & ~0xFFF;
+    rw_size = ((header->segments[2].size + header->bss_size + 0xFFF) & ~0xFFF);
 
     // Validate segments
     for (int i = 0; i < 3; i++)
