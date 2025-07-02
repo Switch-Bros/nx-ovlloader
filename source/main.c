@@ -182,8 +182,8 @@ void loadNro(void)
     {
         // Unmap previous NRO
         header = &g_nroHeader;
-        rw_size = header->segments[2].size + header->bss_size;
-        rw_size = (rw_size+0xFFF) & ~0xFFF;
+        //rw_size = header->segments[2].size + header->bss_size;
+        rw_size = (header->segments[2].size + header->bss_size + 0xFFF) & ~0xFFF;
 
         // .text
         rc = svcUnmapProcessCodeMemory(
