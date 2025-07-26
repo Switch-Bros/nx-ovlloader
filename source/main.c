@@ -44,6 +44,8 @@ extern void* __stack_top;
 static FsFileSystem g_sdmc;
 static bool g_sdmc_initialized = false;
 
+static volatile bool g_loading = false;
+
 // Cache successful mapping addresses - ACTUAL performance improvement  
 static u64 s_nextMapAddr = 0x8000000000ull;
 
@@ -170,6 +172,16 @@ static void getOwnProcessHandle(void)
 
 void loadNro(void)
 {
+    // If already loading, abort this request
+    if (g_loading) {
+        // Another loadNro() is already running, exit gracefully
+        svcExitProcess();
+        __builtin_unreachable();
+    }
+    
+    // Set loading flag
+    g_loading = true;
+
     NroHeader* header = NULL;
     size_t rw_size;
     Result rc;
@@ -268,17 +280,29 @@ void loadNro(void)
     g_nroHeader = *header;
     header = &g_nroHeader;
 
-    // REAL OPTIMIZATION #3: Cache successful mapping addresses
+    // REAL OPTIMIZATION #3: Cache successful mapping addresses with safety limits
     u64 map_addr = s_nextMapAddr;
+    
+    // Reset if we've gone too far (prevent endless virtual memory consumption)
+    if (s_nextMapAddr > 0x8040000000ull) {  // After ~1GB of virtual memory used
+        s_nextMapAddr = 0x8000000000ull;
+        map_addr = s_nextMapAddr;
+    }
+    
     rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
     if (R_SUCCEEDED(rc)) {
-        s_nextMapAddr = (map_addr + total_size + 0x200000) & ~0x1FFFFFull;
+        s_nextMapAddr = (map_addr + total_size + 0x800000) & ~0x1FFFFFull;
     } else {
-        // Fallback to random if systematic fails
+        // Fallback to random with retry limit (CRITICAL FIX)
+        int retry_count = 0;
         do {
             map_addr = randomGet64() & 0xFFFFFF000ull;
             rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
-        } while (rc == 0xDC01 || rc == 0xD401);
+            retry_count++;
+        } while ((rc == 0xDC01 || rc == 0xD401) && retry_count < 100);  // Prevent infinite loop
+        
+        if (R_FAILED(rc))
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, 18));
     }
 
     if (R_FAILED(rc))
@@ -347,6 +371,9 @@ void loadNro(void)
     g_nroSize = nro_size;
 
     __builtin_memset(__stack_top - STACK_SIZE, 0, STACK_SIZE);
+
+    // Clear the flag right before jumping to new overlay
+    g_loading = false;
 
     extern NX_NORETURN void nroEntrypointTrampoline(u64 entries_ptr, u64 handle, u64 entrypoint);
     nroEntrypointTrampoline((u64) entries, -1, map_addr);
