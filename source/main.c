@@ -40,13 +40,13 @@ Result g_lastRet = 0;
 extern void* __stack_top;
 #define STACK_SIZE 0x10000
 
-// Cache file system handle globally - ACTUAL performance improvement
+// Cache file system handle globally - performance improvement
 static FsFileSystem g_sdmc;
 static bool g_sdmc_initialized = false;
 
 static volatile bool g_loading = false;
 
-// Cache successful mapping addresses - ACTUAL performance improvement  
+// Cache successful mapping addresses - performance improvement  
 static u64 s_nextMapAddr = 0x8000000000ull;
 
 void __libnx_initheap(void)
@@ -262,7 +262,7 @@ void loadNro(void)
     if (header->magic != NROHEADER_MAGIC)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 5));
 
-    size_t total_size = ((header->size + header->bss_size + 0xFFF) & ~0xFFF);
+    const size_t total_size = ((header->size + header->bss_size + 0xFFF) & ~0xFFF);
 
     rw_size = ((header->segments[2].size + header->bss_size + 0xFFF) & ~0xFFF);
 
@@ -284,22 +284,19 @@ void loadNro(void)
     u64 map_addr = s_nextMapAddr;
     
     // Reset if we've gone too far (prevent endless virtual memory consumption)
-    if (s_nextMapAddr > 0x8040000000ull) {  // After ~1GB of virtual memory used
+    if (s_nextMapAddr > 0x8010000000ull) {  // After ~1GB of virtual memory used
         s_nextMapAddr = 0x8000000000ull;
         map_addr = s_nextMapAddr;
     }
     
     rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
     if (R_SUCCEEDED(rc)) {
-        s_nextMapAddr = (map_addr + total_size + 0x800000) & ~0x1FFFFFull;
+        s_nextMapAddr = (map_addr + total_size + 0x4000000) & ~0x1FFFFFull;
     } else {
-        // Fallback to random with retry limit (CRITICAL FIX)
-        int retry_count = 0;
         do {
             map_addr = randomGet64() & 0xFFFFFF000ull;
             rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
-            retry_count++;
-        } while ((rc == 0xDC01 || rc == 0xD401) && retry_count < 100);  // Prevent infinite loop
+        } while ((rc == 0xDC01 || rc == 0xD401));
         
         if (R_FAILED(rc))
             fatalThrow(MAKERESULT(Module_HomebrewLoader, 18));
@@ -326,9 +323,9 @@ void loadNro(void)
     if (R_FAILED(rc))
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 21));
 
-    u64 nro_size = header->segments[2].file_off + rw_size;
-    u64 nro_heap_start = ((u64) g_heapAddr) + nro_size;
-    u64 nro_heap_size  = g_heapSize + (u64) g_heapAddr - (u64) nro_heap_start;
+    const u64 nro_size = header->segments[2].file_off + rw_size;
+    const u64 nro_heap_start = ((u64) g_heapAddr) + nro_size;
+    const u64 nro_heap_size  = g_heapSize + (u64) g_heapAddr - (u64) nro_heap_start;
 
     #define M EntryFlag_IsMandatory
 
