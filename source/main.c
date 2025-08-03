@@ -49,6 +49,23 @@ static volatile bool g_loading = false;
 // Cache successful mapping addresses - performance improvement  
 static u64 s_nextMapAddr = 0x8000000000ull;
 
+#define M EntryFlag_IsMandatory
+
+static ConfigEntry entries[] = {
+    { EntryType_MainThreadHandle,     0, {0, 0} },
+    { EntryType_ProcessHandle,        0, {0, 0} },
+    { EntryType_AppletType,           0, {AppletType_LibraryApplet, 0} },
+    { EntryType_OverrideHeap,         M, {0, 0} },
+    { EntryType_Argv,                 0, {0, 0} },
+    { EntryType_NextLoadPath,         0, {0, 0} },
+    { EntryType_LastLoadResult,       0, {0, 0} },
+    { EntryType_SyscallAvailableHint, 0, {0xffffffffffffffff, 0x9fc1fff0007ffff} },
+    { EntryType_RandomSeed,           0, {0, 0} },
+    { EntryType_UserIdStorage,        0, {(u64)(uintptr_t)&g_userIdStorage, 0} },
+    { EntryType_HosVersion,           0, {0, 0} },
+    { EntryType_EndOfList,            0, {(u64)(uintptr_t)g_noticeText, sizeof(g_noticeText)} }
+};
+
 void __libnx_initheap(void)
 {
     static char g_innerheap[0x4000];
@@ -107,7 +124,7 @@ static size_t g_heapSize;
 static void setupHbHeap(void)
 {
     void* addr = NULL;
-    u64 size = g_appletHeapSize;
+    const u64 size = g_appletHeapSize;
 
     Result rc = svcSetHeapSize(&addr, size);
 
@@ -188,8 +205,7 @@ void loadNro(void)
 
     __builtin_memcpy((u8*)armGetTls() + 0x100, g_savedTls, 0x100);
 
-    if (g_nroSize > 0)
-    {
+    if (g_nroSize > 0) {
         // Unmap previous NRO
         header = &g_nroHeader;
         //rw_size = header->segments[2].size + header->bss_size;
@@ -267,11 +283,9 @@ void loadNro(void)
     rw_size = ((header->segments[2].size + header->bss_size + 0xFFF) & ~0xFFF);
 
     // Validate segments
-    for (int i = 0; i < 3; i++)
-    {
+    for (int i = 0; i < 3; i++) {
         if (header->segments[i].file_off >= header->size || header->segments[i].size > header->size ||
-            (header->segments[i].file_off + header->segments[i].size) > header->size)
-        {
+            (header->segments[i].file_off + header->segments[i].size) > header->size) {
             fatalThrow(MAKERESULT(Module_HomebrewLoader, 6));
         }
     }
@@ -325,24 +339,8 @@ void loadNro(void)
 
     const u64 nro_size = header->segments[2].file_off + rw_size;
     const u64 nro_heap_start = ((u64) g_heapAddr) + nro_size;
-    const u64 nro_heap_size  = g_heapSize + (u64) g_heapAddr - (u64) nro_heap_start;
+    //const u64 nro_heap_size  = g_heapSize + (u64) g_heapAddr - (u64) nro_heap_start;
 
-    #define M EntryFlag_IsMandatory
-
-    static ConfigEntry entries[] = {
-        { EntryType_MainThreadHandle,     0, {0, 0} },
-        { EntryType_ProcessHandle,        0, {0, 0} },
-        { EntryType_AppletType,           0, {AppletType_LibraryApplet, 0} },
-        { EntryType_OverrideHeap,         M, {0, 0} },
-        { EntryType_Argv,                 0, {0, 0} },
-        { EntryType_NextLoadPath,         0, {0, 0} },
-        { EntryType_LastLoadResult,       0, {0, 0} },
-        { EntryType_SyscallAvailableHint, 0, {0xffffffffffffffff, 0x9fc1fff0007ffff} },
-        { EntryType_RandomSeed,           0, {0, 0} },
-        { EntryType_UserIdStorage,        0, {(u64)(uintptr_t)&g_userIdStorage, 0} },
-        { EntryType_HosVersion,           0, {0, 0} },
-        { EntryType_EndOfList,            0, {(u64)(uintptr_t)g_noticeText, sizeof(g_noticeText)} }
-    };
     
     // Fill entry values
     entries[0].Value[0] = envGetMainThreadHandle();
@@ -350,7 +348,7 @@ void loadNro(void)
     entries[1].Value[0] = g_procHandle;
     // OverrideHeap
     entries[3].Value[0] = nro_heap_start;
-    entries[3].Value[1] = nro_heap_size;
+    entries[3].Value[1] = g_heapSize + (u64) g_heapAddr - (u64) nro_heap_start;
     // Argv
     entries[4].Value[1] = (u64) &g_argv[0];
     // NextLoadPath
@@ -380,7 +378,7 @@ int main(int argc, char **argv)
 {
     if (hosversionBefore(9,0,0))
         exit(1);
-    
+
     __builtin_memcpy(g_savedTls, (u8*)armGetTls() + 0x100, 0x100);
 
     setupHbHeap();
