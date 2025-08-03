@@ -66,8 +66,7 @@ static ConfigEntry entries[] = {
     { EntryType_EndOfList,            0, {(u64)(uintptr_t)g_noticeText, sizeof(g_noticeText)} }
 };
 
-void __libnx_initheap(void)
-{
+void __libnx_initheap(void) {
     static char g_innerheap[0x4000];
 
     extern char* fake_heap_start;
@@ -77,8 +76,7 @@ void __libnx_initheap(void)
     fake_heap_end   = &g_innerheap[sizeof g_innerheap];
 }
 
-void __appInit(void)
-{
+void __appInit(void) {
     Result rc;
 
     rc = smInitialize();
@@ -107,8 +105,7 @@ void __appInit(void)
     smExit();
 }
 
-void __wrap_exit(void)
-{
+void __wrap_exit(void) {
     // Clean up cached filesystem handle
     if (g_sdmc_initialized) {
         fsFsClose(&g_sdmc);
@@ -121,8 +118,7 @@ void __wrap_exit(void)
 static void*  g_heapAddr;
 static size_t g_heapSize;
 
-static void setupHbHeap(void)
-{
+static void setupHbHeap(void) {
     void* addr = NULL;
     const u64 size = g_appletHeapSize;
 
@@ -137,8 +133,7 @@ static void setupHbHeap(void)
 
 static Handle g_procHandle;
 
-static void procHandleReceiveThread(void* arg)
-{
+static void procHandleReceiveThread(void* arg) {
     Handle session = (Handle)(uintptr_t)arg;
     Result rc;
 
@@ -158,8 +153,7 @@ static void procHandleReceiveThread(void* arg)
     svcCloseHandle(session);
 }
 
-static void getOwnProcessHandle(void)
-{
+static void getOwnProcessHandle(void) {
     Result rc;
 
     Handle server_handle, client_handle;
@@ -187,8 +181,7 @@ static void getOwnProcessHandle(void)
     threadClose(&t);
 }
 
-void loadNro(void)
-{
+void loadNro(void) {
     // If already loading, abort this request
     if (g_loading) {
         // Another loadNro() is already running, exit gracefully
@@ -374,8 +367,7 @@ void loadNro(void)
     nroEntrypointTrampoline((u64) entries, -1, map_addr);
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     if (hosversionBefore(9,0,0))
         exit(1);
 
