@@ -15,9 +15,9 @@ const char g_noticeText[] =
     " " VERSION "\0"
     "What gives an idea power? Its origin? Its truth? Its reach? No. Its ability to collapse, reassemble, and still mean the same thing.";
 
-static char g_argv[512];
-static char g_nextArgv[512];
-static char g_nextNroPath[256];
+static char g_argv[1024];
+static char g_nextArgv[1024];
+static char g_nextNroPath[512];
 u64  g_nroAddr = 0;
 static u64  g_nroSize = 0;
 static NroHeader g_nroHeader;
