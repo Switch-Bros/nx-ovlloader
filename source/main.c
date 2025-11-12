@@ -44,10 +44,16 @@ extern void* __stack_top;
 static FsFileSystem g_sdmc;
 static bool g_sdmc_initialized = false;
 
+// Atomic loading flag to prevent concurrent loads
 static _Atomic bool g_loading = false;
 
-// Cache successful mapping addresses - performance improvement  
+// Rotating address window - prevents unbounded growth while maintaining speed
 static u64 s_nextMapAddr = 0x8000000000ull;
+static const u64 ADDR_WINDOW_START = 0x8000000000ull;
+static const u64 ADDR_WINDOW_SIZE = 0x20000000ull;  // 512MB window
+
+// Cache HOS version - firmware version doesn't change without reboot
+static u64 s_hosVersion = 0;
 
 #define M EntryFlag_IsMandatory
 
@@ -87,8 +93,10 @@ void __appInit(void) {
     if (R_SUCCEEDED(rc)) {
         SetSysFirmwareVersion fw;
         rc = setsysGetFirmwareVersion(&fw);
-        if (R_SUCCEEDED(rc))
+        if (R_SUCCEEDED(rc)) {
             hosversionSet(MAKEHOSVERSION(fw.major, fw.minor, fw.micro));
+            s_hosVersion = hosversionGet(); // Cache it once at startup
+        }
     #if BUILD_LOADER_PLUS_DIRECTIVE
         g_appletHeapSize = 0x800000;
     #else
@@ -182,7 +190,7 @@ static void getOwnProcessHandle(void) {
 }
 
 void loadNro(void) {
-    // Atomically check-and-set loading flag
+    // Atomically check-and-set loading flag to prevent concurrent loads
     if (__atomic_test_and_set(&g_loading, __ATOMIC_SEQ_CST)) {
         // Another loadNro() is already running, exit gracefully
         svcExitProcess();
@@ -198,7 +206,6 @@ void loadNro(void) {
     if (g_nroSize > 0) {
         // Unmap previous NRO
         header = &g_nroHeader;
-        //rw_size = header->segments[2].size + header->bss_size;
         rw_size = (header->segments[2].size + header->bss_size + 0xFFF) & ~0xFFF;
 
         // .text
@@ -232,10 +239,9 @@ void loadNro(void) {
 
     uint8_t *nrobuf = (uint8_t*) g_heapAddr;
 
-    //NroStart*  start  = (NroStart*)  (nrobuf + 0);
     header = (NroHeader*) (nrobuf + sizeof(NroStart));
     
-    // REAL OPTIMIZATION #1: Cache filesystem handle instead of reopening every time
+    // Cache filesystem handle instead of reopening every time
     if (!g_sdmc_initialized) {
         rc = fsOpenSdCardFileSystem(&g_sdmc);
         if (R_FAILED(rc))
@@ -246,24 +252,21 @@ void loadNro(void) {
     FsFile fd;
     rc = fsFsOpenFile(&g_sdmc, g_nextNroPath + 5, FsOpenMode_Read, &fd);
     if (R_FAILED(rc)) {
+        // Clear flag before exiting on error
+        __atomic_clear(&g_loading, __ATOMIC_SEQ_CST);
         exit(1);
     }
 
     // Reset NRO path to load hbmenu by default next time.
     g_nextNroPath[0] = '\0';
 
-    // REAL OPTIMIZATION #2: Skip fsFileGetSize, just read and check bytes_read
-    // Read file in one go and let bytes_read tell us the actual size
+    // Read file in one go
     u64 bytes_read;
     rc = fsFileRead(&fd, 0, nrobuf, g_heapSize, FsReadOption_None, &bytes_read);
     fsFileClose(&fd);
     
     if (R_FAILED(rc) || bytes_read == 0)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 4));
-
-    // Copy to final locations
-    //*start = *(NroStart*)nrobuf;
-    //*header = *(NroHeader*)(nrobuf + sizeof(NroStart));
 
     if (header->magic != NROHEADER_MAGIC)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 5));
@@ -284,30 +287,33 @@ void loadNro(void) {
     g_nroHeader = *header;
     header = &g_nroHeader;
 
-    // REAL OPTIMIZATION #3: Cache successful mapping addresses with safety limits
+    // Rotating window strategy: increment address within a fixed 512MB window
+    // This gives us fresh addresses (fast) while preventing unbounded growth (no crash)
     u64 map_addr = s_nextMapAddr;
-    
-    // Reset if we've gone too far (prevent endless virtual memory consumption)
-    if (s_nextMapAddr > 0x8010000000ull) {  // After ~1GB of virtual memory used
-        s_nextMapAddr = 0x8000000000ull;
-        map_addr = s_nextMapAddr;
-    }
     
     rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
     if (R_SUCCEEDED(rc)) {
-        s_nextMapAddr = (map_addr + total_size + 0x4000000) & ~0x1FFFFFull;
+        // Success! Advance to next address, wrapping within the window
+        s_nextMapAddr = map_addr + total_size + 0x4000000; // +64MB spacing
+        s_nextMapAddr = (s_nextMapAddr & ~0x1FFFFFull);    // Align to 2MB
+        
+        // Wrap around if we exceed the window
+        if (s_nextMapAddr >= ADDR_WINDOW_START + ADDR_WINDOW_SIZE) {
+            s_nextMapAddr = ADDR_WINDOW_START;
+        }
     } else {
+        // Mapping failed (window wrapped and old addresses not reclaimed yet)
+        // Fall back to random search
         do {
             map_addr = randomGet64() & 0xFFFFFF000ull;
             rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
-        } while ((rc == 0xDC01 || rc == 0xD401));
+        } while (R_FAILED(rc) && (rc == 0xDC01 || rc == 0xD401));
         
         if (R_FAILED(rc))
             fatalThrow(MAKERESULT(Module_HomebrewLoader, 18));
+        
+        // Don't update s_nextMapAddr - keep trying the window on next load
     }
-
-    if (R_FAILED(rc))
-        fatalThrow(MAKERESULT(Module_HomebrewLoader, 18));
 
     // .text
     rc = svcSetProcessMemoryPermission(
@@ -329,28 +335,19 @@ void loadNro(void) {
 
     const u64 nro_size = header->segments[2].file_off + rw_size;
     const u64 nro_heap_start = ((u64) g_heapAddr) + nro_size;
-    //const u64 nro_heap_size  = g_heapSize + (u64) g_heapAddr - (u64) nro_heap_start;
 
-    
     // Fill entry values
     entries[0].Value[0] = envGetMainThreadHandle();
-    // ProcessHandle
     entries[1].Value[0] = g_procHandle;
-    // OverrideHeap
     entries[3].Value[0] = nro_heap_start;
     entries[3].Value[1] = g_heapSize + (u64) g_heapAddr - (u64) nro_heap_start;
-    // Argv
     entries[4].Value[1] = (u64) &g_argv[0];
-    // NextLoadPath
     entries[5].Value[0] = (u64) &g_nextNroPath[0];
     entries[5].Value[1] = (u64) &g_nextArgv[0];
-    // LastLoadResult
     entries[6].Value[0] = g_lastRet;
-    // RandomSeed
     entries[8].Value[0] = randomGet64();
     entries[8].Value[1] = randomGet64();
-    // HosVersion
-    entries[10].Value[0] = hosversionGet();
+    entries[10].Value[0] = s_hosVersion; // Use cached version
 
     g_nroAddr = map_addr;
     g_nroSize = nro_size;
