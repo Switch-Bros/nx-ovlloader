@@ -44,7 +44,7 @@ extern void* __stack_top;
 static FsFileSystem g_sdmc;
 static bool g_sdmc_initialized = false;
 
-static volatile bool g_loading = false;
+static _Atomic bool g_loading = false;
 
 // Cache successful mapping addresses - performance improvement  
 static u64 s_nextMapAddr = 0x8000000000ull;
@@ -182,15 +182,12 @@ static void getOwnProcessHandle(void) {
 }
 
 void loadNro(void) {
-    // If already loading, abort this request
-    if (g_loading) {
+    // Atomically check-and-set loading flag
+    if (__atomic_test_and_set(&g_loading, __ATOMIC_SEQ_CST)) {
         // Another loadNro() is already running, exit gracefully
         svcExitProcess();
         __builtin_unreachable();
     }
-    
-    // Set loading flag
-    g_loading = true;
 
     NroHeader* header = NULL;
     size_t rw_size;
@@ -361,7 +358,7 @@ void loadNro(void) {
     __builtin_memset(__stack_top - STACK_SIZE, 0, STACK_SIZE);
 
     // Clear the flag right before jumping to new overlay
-    g_loading = false;
+    __atomic_clear(&g_loading, __ATOMIC_SEQ_CST);
 
     extern NX_NORETURN void nroEntrypointTrampoline(u64 entries_ptr, u64 handle, u64 entrypoint);
     nroEntrypointTrampoline((u64) entries, -1, map_addr);
