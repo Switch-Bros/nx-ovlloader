@@ -47,10 +47,11 @@ static bool g_sdmc_initialized = false;
 // Atomic loading flag to prevent concurrent loads
 static _Atomic bool g_loading = false;
 
-// Rotating address window - prevents unbounded growth while maintaining speed
-static u64 s_nextMapAddr = 0x8000000000ull;
-//static const u64 ADDR_WINDOW_START = 0x8000000000ull;
-//static const u64 ADDR_WINDOW_SIZE = 0x20000000ull;  // 512MB window
+// Rotating address strategy: increment within 64GB-256GB range
+// Provides predictable fast mapping while respecting 38-bit address space limit (256GB)
+static u64 s_nextMapAddr = 0x1000000000ull;
+static const u64 ADDR_LIMIT = 0x4000000000ull;  // 256GB limit
+
 
 // Cache HOS version - firmware version doesn't change without reboot
 static u64 s_hosVersion = 0;
@@ -305,9 +306,9 @@ void loadNro(void) {
         s_nextMapAddr = (map_addr + total_size + 0x4000000) & ~0x1FFFFFull;    // Align to 2MB
         
         // Wrap around if we exceed the window
-        //if (s_nextMapAddr >= ADDR_WINDOW_START + ADDR_WINDOW_SIZE) {
-        //    s_nextMapAddr = ADDR_WINDOW_START;
-        //}
+        if (s_nextMapAddr >= ADDR_LIMIT) {
+            s_nextMapAddr = 0x1000000000ull;  // Wrap
+        }
     } else {
         // Mapping failed (window wrapped and old addresses not reclaimed yet)
         // Fall back to random search
