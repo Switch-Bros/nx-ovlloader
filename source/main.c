@@ -49,8 +49,8 @@ static _Atomic bool g_loading = false;
 
 // Rotating address window - prevents unbounded growth while maintaining speed
 static u64 s_nextMapAddr = 0x8000000000ull;
-static const u64 ADDR_WINDOW_START = 0x8000000000ull;
-static const u64 ADDR_WINDOW_SIZE = 0x20000000ull;  // 512MB window
+//static const u64 ADDR_WINDOW_START = 0x8000000000ull;
+//static const u64 ADDR_WINDOW_SIZE = 0x20000000ull;  // 512MB window
 
 // Cache HOS version - firmware version doesn't change without reboot
 static u64 s_hosVersion = 0;
@@ -294,13 +294,13 @@ void loadNro(void) {
     rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
     if (R_SUCCEEDED(rc)) {
         // Success! Advance to next address, wrapping within the window
-        s_nextMapAddr = map_addr + total_size + 0x4000000; // +64MB spacing
-        s_nextMapAddr = (s_nextMapAddr & ~0x1FFFFFull);    // Align to 2MB
+        //s_nextMapAddr = map_addr + total_size + 0x4000000; // +64MB spacing
+        s_nextMapAddr = ((map_addr + total_size + 0x4000000) & ~0x1FFFFFull);    // Align to 2MB
         
         // Wrap around if we exceed the window
-        if (s_nextMapAddr >= ADDR_WINDOW_START + ADDR_WINDOW_SIZE) {
-            s_nextMapAddr = ADDR_WINDOW_START;
-        }
+        //if (s_nextMapAddr >= ADDR_WINDOW_START + ADDR_WINDOW_SIZE) {
+        //    s_nextMapAddr = ADDR_WINDOW_START;
+        //}
     } else {
         // Mapping failed (window wrapped and old addresses not reclaimed yet)
         // Fall back to random search
