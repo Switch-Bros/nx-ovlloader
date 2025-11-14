@@ -128,15 +128,13 @@ static size_t g_heapSize;
 
 static void setupHbHeap(void) {
     void* addr = NULL;
-    const u64 size = g_appletHeapSize;
-
-    Result rc = svcSetHeapSize(&addr, size);
-
+    Result rc = svcSetHeapSize(&addr, g_appletHeapSize);
+    
     if (R_FAILED(rc) || addr==NULL)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 9));
-
+    
     g_heapAddr = addr;
-    g_heapSize = size;
+    g_heapSize = g_appletHeapSize;
 }
 
 static Handle g_procHandle;
@@ -271,21 +269,30 @@ void loadNro(void) {
     if (header->magic != NROHEADER_MAGIC)
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 5));
 
+
+    // Copy header to elsewhere because we're going to unmap it next.
+    g_nroHeader = *header;
+    header = &g_nroHeader;
+
     const size_t total_size = ((header->size + header->bss_size + 0xFFF) & ~0xFFF);
 
     rw_size = ((header->segments[2].size + header->bss_size + 0xFFF) & ~0xFFF);
 
     // Validate segments
     for (int i = 0; i < 3; i++) {
-        if (header->segments[i].file_off >= header->size || header->segments[i].size > header->size ||
-            (header->segments[i].file_off + header->segments[i].size) > header->size) {
+        const u32 offset = header->segments[i].file_off;
+        const u32 size = header->segments[i].size;
+        
+        // Check 1: offset must be within file
+        if (offset >= header->size) {
+            fatalThrow(MAKERESULT(Module_HomebrewLoader, 6));
+        }
+        
+        // Check 2: size must not exceed remaining space (overflow-safe)
+        if (size > header->size - offset) {
             fatalThrow(MAKERESULT(Module_HomebrewLoader, 6));
         }
     }
-
-    // Copy header to elsewhere because we're going to unmap it next.
-    g_nroHeader = *header;
-    header = &g_nroHeader;
 
     // Rotating window strategy: increment address within a fixed 512MB window
     // This gives us fresh addresses (fast) while preventing unbounded growth (no crash)
@@ -295,7 +302,7 @@ void loadNro(void) {
     if (R_SUCCEEDED(rc)) {
         // Success! Advance to next address, wrapping within the window
         //s_nextMapAddr = map_addr + total_size + 0x4000000; // +64MB spacing
-        s_nextMapAddr = ((map_addr + total_size + 0x4000000) & ~0x1FFFFFull);    // Align to 2MB
+        s_nextMapAddr = (map_addr + total_size + 0x4000000) & ~0x1FFFFFull;    // Align to 2MB
         
         // Wrap around if we exceed the window
         //if (s_nextMapAddr >= ADDR_WINDOW_START + ADDR_WINDOW_SIZE) {
