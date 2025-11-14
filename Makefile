@@ -54,7 +54,7 @@ APP_VERSION	:=	1.1.2
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
 # Balanced performance compiler flags
-CFLAGS	:=	-g -Wall -O2 -ffunction-sections -fdata-sections \
+CFLAGS	:=	-g -Wall -Os -ffunction-sections -fdata-sections \
 			-ffast-math -fomit-frame-pointer -fno-stack-protector \
 			-flto -ffat-lto-objects \
             -fuse-linker-plugin -finline-small-functions \
