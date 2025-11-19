@@ -6,13 +6,11 @@
 #include <unistd.h>
 
 #define DEFAULT_NRO "sdmc:/switch/.overlays/ovlmenu.ovl"
+#define HEAP_CONFIG_PATH "/config/nx-ovlloader/heap_size.bin"
+#define EXIT_FLAG_PATH "/config/nx-ovlloader/exit_flag.bin"
 
 const char g_noticeText[] =
-    "nx-ovlloader"
-#if BUILD_LOADER_PLUS_DIRECTIVE
-    "+"
-#endif
-    " " VERSION "\0"
+    "nx-ovlloader " VERSION "\0"
     "What gives an idea power? Its origin? Its truth? Its reach? No. Its ability to collapse, reassemble, and still mean the same thing.";
 
 static char g_argv[1024];
@@ -52,7 +50,6 @@ static _Atomic bool g_loading = false;
 static u64 s_nextMapAddr = 0x1000000000ull;
 static const u64 ADDR_LIMIT = 0x4000000000ull;  // 256GB limit
 
-
 // Cache HOS version - firmware version doesn't change without reboot
 static u64 s_hosVersion = 0;
 
@@ -83,6 +80,11 @@ void __libnx_initheap(void) {
     fake_heap_end   = &g_innerheap[sizeof g_innerheap];
 }
 
+// Fast inline heap size validator
+static inline bool isValidHeapSize(u64 size) {
+    return (size == 0x400000 || size == 0x600000 || size == 0x800000 || size == 0xA00000);
+}
+
 void __appInit(void) {
     Result rc;
 
@@ -90,36 +92,132 @@ void __appInit(void) {
     if (R_FAILED(rc))
         fatalThrow(MAKERESULT(Module_HomebrewLoader, 1));
 
+    rc = fsInitialize();
+    if (R_FAILED(rc))
+        fatalThrow(MAKERESULT(Module_HomebrewLoader, 2));
+
+    // Read persistent heap size config early
+    FsFileSystem tempSdmc;
+    rc = fsOpenSdCardFileSystem(&tempSdmc);
+    if (R_SUCCEEDED(rc)) {
+        FsFile fd;
+        rc = fsFsOpenFile(&tempSdmc, HEAP_CONFIG_PATH, FsOpenMode_Read, &fd);
+        if (R_SUCCEEDED(rc)) {
+            u64 bytes_read, savedHeapSize;
+            rc = fsFileRead(&fd, 0, &savedHeapSize, sizeof(savedHeapSize), 
+                           FsReadOption_None, &bytes_read);
+            fsFileClose(&fd);
+            
+            if (R_SUCCEEDED(rc) && bytes_read == sizeof(savedHeapSize) && 
+                isValidHeapSize(savedHeapSize)) {
+                g_appletHeapSize = savedHeapSize;
+            }
+        }
+        fsFsClose(&tempSdmc);
+    }
+
     rc = setsysInitialize();
     if (R_SUCCEEDED(rc)) {
         SetSysFirmwareVersion fw;
         rc = setsysGetFirmwareVersion(&fw);
         if (R_SUCCEEDED(rc)) {
             hosversionSet(MAKEHOSVERSION(fw.major, fw.minor, fw.micro));
-            s_hosVersion = hosversionGet(); // Cache it once at startup
+            s_hosVersion = hosversionGet();
         }
-    #if BUILD_LOADER_PLUS_DIRECTIVE
-        g_appletHeapSize = 0x800000;
-    #else
-        g_appletHeapSize = 0x600000;
-    #endif
+        
+        // Default to 6MB if no valid config found
+        if (g_appletHeapSize == 0) {
+            g_appletHeapSize = 0x600000;
+        }
+        
         g_appletHeapReservationSize = 0x00;
         setsysExit();
     }
 
-    rc = fsInitialize();
-    if (R_FAILED(rc))
-        fatalThrow(MAKERESULT(Module_HomebrewLoader, 2));
-
     smExit();
 }
 
+// Add this at the top with other defines
+#define DEBUG_FLAG_PATH "/ovlloader_debug.txt"
+
+// Replace your __wrap_exit with this heavily instrumented version
 void __wrap_exit(void) {
-    // Clean up cached filesystem handle
+    // Open/init SD card if needed
+    if (!g_sdmc_initialized) {
+        Result rc = fsOpenSdCardFileSystem(&g_sdmc);
+        if (R_SUCCEEDED(rc)) {
+            g_sdmc_initialized = true;
+        }
+    }
+    
+    // Write debug marker 1
+    //if (g_sdmc_initialized) {
+    //    fsFsCreateFile(&g_sdmc, "/debug1_entered_wrap_exit.txt", 0, 0);
+    //}
+    
+    Result rc;
+    
+    // Reinitialize SM
+    rc = smInitialize();
+    
+    //if (g_sdmc_initialized) {
+    //    if (R_SUCCEEDED(rc)) {
+    //        fsFsCreateFile(&g_sdmc, "/debug2_sm_init_ok.txt", 0, 0);
+    //    } else {
+    //        fsFsCreateFile(&g_sdmc, "/debug2_sm_init_FAILED.txt", 0, 0);
+    //    }
+    //}
+    
+    if (R_FAILED(rc)) {
+        if (g_sdmc_initialized) {
+            fsFsClose(&g_sdmc);
+            g_sdmc_initialized = false;
+        }
+        svcExitProcess();
+        __builtin_unreachable();
+    }
+    
+    // Try pmshell init
+    rc = pmshellInitialize();
+    
+    //if (g_sdmc_initialized) {
+    //    if (R_SUCCEEDED(rc)) {
+    //        fsFsCreateFile(&g_sdmc, "/debug3_pmshell_init_ok.txt", 0, 0);
+    //    } else {
+    //        fsFsCreateFile(&g_sdmc, "/debug3_pmshell_init_FAILED.txt", 0, 0);
+    //    }
+    //}
+    
+    if (R_SUCCEEDED(rc)) {
+        NcmProgramLocation programLocation = {
+            .program_id = 0x420000000007E51BULL,
+            .storageID = NcmStorageId_None,
+        };
+        
+        u64 pid = 0;
+        rc = pmshellLaunchProgram(0, &programLocation, &pid);
+        
+        if (R_SUCCEEDED(rc) && pid != 0) {
+            // CRITICAL: Give PM time to actually spawn the process
+            // before we exit and clean up our handles
+            svcSleepThread(500000000ULL); // 500ms
+            
+            //if (g_sdmc_initialized) {
+            //    fsFsCreateFile(&g_sdmc, "/debug4_launch_SUCCESS.txt", 0, 0);
+            //}
+        }
+        
+        pmshellExit();
+    }
+    
+    smExit();
+    
+    // Clean up
     if (g_sdmc_initialized) {
         fsFsClose(&g_sdmc);
         g_sdmc_initialized = false;
     }
+    
     svcExitProcess();
     __builtin_unreachable();
 }
@@ -186,6 +284,59 @@ static void getOwnProcessHandle(void) {
 
     threadWaitForExit(&t);
     threadClose(&t);
+}
+
+// Fast exit check - called from trampoline between overlays
+// Returns true if user requested complete exit
+bool checkExitRequested(void) {
+    // Early init check - fast path
+    if (!g_sdmc_initialized) {
+        Result rc = fsOpenSdCardFileSystem(&g_sdmc);
+        if (R_FAILED(rc)) return false;
+        g_sdmc_initialized = true;
+    }
+    
+    FsFile fd;
+    Result rc = fsFsOpenFile(&g_sdmc, EXIT_FLAG_PATH, FsOpenMode_Read, &fd);
+    if (R_FAILED(rc)) {
+        return false; // No flag file = don't exit
+    }
+    
+    // Flag exists - delete it and signal exit
+    fsFileClose(&fd);
+    fsFsDeleteFile(&g_sdmc, EXIT_FLAG_PATH);
+    
+    return true; // Exit requested!
+}
+
+// Fast heap change check - called from trampoline between overlays
+// Returns true if loader needs to restart with new heap size
+bool checkHeapSizeChange(void) {
+    // Early init check - fast path
+    if (!g_sdmc_initialized) {
+        Result rc = fsOpenSdCardFileSystem(&g_sdmc);
+        if (R_FAILED(rc)) return false;
+        g_sdmc_initialized = true;
+    }
+    
+    FsFile fd;
+    Result rc = fsFsOpenFile(&g_sdmc, HEAP_CONFIG_PATH, FsOpenMode_Read, &fd);
+    if (R_FAILED(rc)) {
+        return false; // No config = no change
+    }
+    
+    u64 bytes_read, configHeapSize;
+    rc = fsFileRead(&fd, 0, &configHeapSize, sizeof(configHeapSize), 
+                    FsReadOption_None, &bytes_read);
+    fsFileClose(&fd);
+    
+    // Fast validation and comparison
+    if (R_SUCCEEDED(rc) && bytes_read == sizeof(configHeapSize) && 
+        isValidHeapSize(configHeapSize) && configHeapSize != g_appletHeapSize) {
+        return true; // Heap size changed!
+    }
+    
+    return false;
 }
 
 void loadNro(void) {
@@ -302,7 +453,6 @@ void loadNro(void) {
     rc = svcMapProcessCodeMemory(g_procHandle, map_addr, (u64)nrobuf, total_size);
     if (R_SUCCEEDED(rc)) {
         // Success! Advance to next address, wrapping within the window
-        //s_nextMapAddr = map_addr + total_size + 0x4000000; // +64MB spacing
         s_nextMapAddr = (map_addr + total_size + 0x4000000) & ~0x1FFFFFull;    // Align to 2MB
         
         // Wrap around if we exceed the window
