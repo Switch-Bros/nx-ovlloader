@@ -74,29 +74,24 @@ void __appExit(void) {
 int main(int argc, char **argv) {
     
     Result rc;
-    #if !BUILDING_NRO_DIRECTIVE
+
+#if !BUILDING_NRO_DIRECTIVE
     
     u64 startTick = armGetSystemTick();
     
     // Phase 1: Wait for nx-ovlloader to exit (it should be exiting when we start)
-    bool processExited = false;
     while (true) {
-        const u64 now = armGetSystemTick();
-        const u64 elapsed = armTicksToNs(now - startTick);
-        
         // Timeout check
-        if (elapsed >= TIMEOUT_NS) {
+        if (armTicksToNs(armGetSystemTick() - startTick) >= TIMEOUT_NS) {
             // Process didn't exit in time, just exit ourselves
             return 1;
         }
         
         u64 pid = 0;
         rc = pmdmntGetProcessId(&pid, OVLLOADER_TID);
-        bool isRunning = R_SUCCEEDED(rc) && pid != 0;
         
-        if (!isRunning) {
+        if (R_FAILED(rc) || pid == 0) {
             // Process has exited, proceed to respawn phase
-            processExited = true;
             break;
         }
         
@@ -104,65 +99,56 @@ int main(int argc, char **argv) {
     }
     
     // Phase 2: Wait the respawn delay
-    if (processExited) {
-        svcSleepThread(RESPAWN_DELAY_NS);
-        
-        // Phase 3: Relaunch nx-ovlloader
-        NcmProgramLocation programLocation = {
-            .program_id = OVLLOADER_TID,
-            .storageID = NcmStorageId_None,
-        };
-        
-        u64 newPid = 0;
-        pmshellLaunchProgram(0, &programLocation, &newPid);
-        
-        //if (R_FAILED(rc) || newPid == 0) {
-        //    // Failed to launch, but we tried
-        //    return 2;
-        //}
-        
-        // Successfully relaunched - wait a moment to ensure it starts properly
-        //svcSleepThread(200000000ULL); // 200ms
-        
-        // Verify it's actually running
-        //u64 checkPid = 0;
-        //rc = pmdmntGetProcessId(&checkPid, OVLLOADER_TID);
-        //if (R_FAILED(rc) || checkPid == 0) {
-        //    // Launch failed or process died immediately
-        //    return 3;
-        //}
-    }
-    #else
-
+    svcSleepThread(RESPAWN_DELAY_NS);
+    
+    // Phase 3: Relaunch nx-ovlloader
+    NcmProgramLocation programLocation = {
+        .program_id = OVLLOADER_TID,
+        .storageID = NcmStorageId_None,
+    };
+    
+    u64 newPid = 0;
+    pmshellLaunchProgram(0, &programLocation, &newPid);
+    
+#else
     u64 pid = 0;
     rc = pmdmntGetProcessId(&pid, OVLLOADER_TID);
-    bool isRunning = R_SUCCEEDED(rc) && pid != 0;
     
-    if (!isRunning) {
-        // Relaunch nx-ovlloader
-        NcmProgramLocation programLocation = {
-            .program_id = OVLLOADER_TID,
-            .storageID = NcmStorageId_None,
-        };
+    if (R_SUCCEEDED(rc) && pid != 0) {  // Can also optimize this
+        // Kill the existing process
+        pmshellTerminateProgram(OVLLOADER_TID);
         
-        u64 newPid = 0;
-        pmshellLaunchProgram(0, &programLocation, &newPid);
+        // Wait briefly for termination to complete
+        svcSleepThread(RESPAWN_DELAY_NS);
+        
+        // Verify it actually terminated before respawning
+        u64 checkPid = 0;
+        u64 startTick = armGetSystemTick();
+        while (true) {
+            rc = pmdmntGetProcessId(&checkPid, OVLLOADER_TID);
+            if (R_FAILED(rc) || checkPid == 0) {
+                // Process terminated successfully
+                break;
+            }
+            
+            if (armTicksToNs(armGetSystemTick() - startTick) >= TIMEOUT_NS) {
+                // Couldn't kill it, abort
+                return 1;
+            }
+            
+            svcSleepThread(CHECK_INTERVAL_NS);
+        }
     }
-
     
-    //if (R_FAILED(rc) || newPid == 0) {
-    //    // Failed to launch, but we tried
-    //    return 2;
-    //}
+    // Now relaunch nx-ovlloader
+    NcmProgramLocation programLocation = {
+        .program_id = OVLLOADER_TID,
+        .storageID = NcmStorageId_None,
+    };
     
-    // Verify it's actually running
-    //u64 checkPid = 0;
-    //rc = pmdmntGetProcessId(&checkPid, OVLLOADER_TID);
-    //if (R_FAILED(rc) || checkPid == 0) {
-    //    // Launch failed or process died immediately
-    //    return 3;
-    //}
-    #endif
+    u64 newPid = 0;
+    pmshellLaunchProgram(0, &programLocation, &newPid);
+#endif
     
     // Mission accomplished - exit cleanly
     return 0;
