@@ -114,7 +114,7 @@ int main(int argc, char **argv) {
     u64 pid = 0;
     rc = pmdmntGetProcessId(&pid, OVLLOADER_TID);
     
-    if (R_SUCCEEDED(rc) && pid != 0) {  // Can also optimize this
+    if (R_SUCCEEDED(rc) && pid != 0) {
         // Kill the existing process
         pmshellTerminateProgram(OVLLOADER_TID);
         
