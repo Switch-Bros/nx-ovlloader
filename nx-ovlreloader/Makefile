@@ -17,7 +17,7 @@ DATA		:=	data
 INCLUDES	:=	include
 APP_TITLE	:=  Ultrahand Reload
 APP_AUTHOR	:=  ppkantorski
-APP_VERSION	:=	1.1.3
+APP_VERSION	:=	1.0.0
 APP_ICON	:=	icon.jpg
 #NO_ICON := 1
 
