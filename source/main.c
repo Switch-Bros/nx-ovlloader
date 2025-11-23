@@ -82,7 +82,8 @@ void __libnx_initheap(void) {
 
 // Fast inline heap size validator
 static inline bool isValidHeapSize(u64 size) {
-    return (size == 0x400000 || size == 0x600000 || size == 0x800000 || size == 0xA00000);
+    constexpr u64 twoMB = 0x200000;
+    return size != twoMB && size % twoMB == 0;
 }
 
 void __appInit(void) {
@@ -138,7 +139,7 @@ void __appInit(void) {
 }
 
 // Add this at the top with other defines
-#define DEBUG_FLAG_PATH "/ovlloader_debug.txt"
+//#define DEBUG_FLAG_PATH "/ovlloader_debug.txt"
 
 // Replace your __wrap_exit with this heavily instrumented version
 void __wrap_exit(void) {
