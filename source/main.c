@@ -126,9 +126,15 @@ void __appInit(void) {
             s_hosVersion = hosversionGet();
         }
         
-        // Default to 6MB if no valid config found
+        // Default values if no valid config found
         if (g_appletHeapSize == 0) {
-            g_appletHeapSize = 0x600000;
+            if (hosversionAtLeast(21, 0, 0)) {
+                g_appletHeapSize = 0x400000;  // 4MB for HOS 21.0.0+
+            } else if (hosversionAtLeast(20, 0, 0)) {
+                g_appletHeapSize = 0x600000;  // 6MB for HOS 20.0.0+
+            } else {
+                g_appletHeapSize = 0x800000;  // 8MB for older versions
+            }
         }
         
         g_appletHeapReservationSize = 0x00;
