@@ -1,0 +1,3 @@
+[submodule "external/nx-ovlreloader"]
+	path = external/nx-ovlreloader
+	url = https://github.com/ppkantorski/nx-ovlreloader.git
