@@ -144,10 +144,6 @@ void __appInit(void) {
     smExit();
 }
 
-// Add this at the top with other defines
-//#define DEBUG_FLAG_PATH "/ovlloader_debug.txt"
-
-// Replace your __wrap_exit with this heavily instrumented version
 void __wrap_exit(void) {
     // Open/init SD card if needed
     if (!g_sdmc_initialized) {
@@ -157,23 +153,10 @@ void __wrap_exit(void) {
         }
     }
     
-    // Write debug marker 1
-    //if (g_sdmc_initialized) {
-    //    fsFsCreateFile(&g_sdmc, "/debug1_entered_wrap_exit.txt", 0, 0);
-    //}
-    
     Result rc;
     
     // Reinitialize SM
     rc = smInitialize();
-    
-    //if (g_sdmc_initialized) {
-    //    if (R_SUCCEEDED(rc)) {
-    //        fsFsCreateFile(&g_sdmc, "/debug2_sm_init_ok.txt", 0, 0);
-    //    } else {
-    //        fsFsCreateFile(&g_sdmc, "/debug2_sm_init_FAILED.txt", 0, 0);
-    //    }
-    //}
     
     if (R_FAILED(rc)) {
         if (g_sdmc_initialized) {
@@ -186,14 +169,6 @@ void __wrap_exit(void) {
     
     // Try pmshell init
     rc = pmshellInitialize();
-    
-    //if (g_sdmc_initialized) {
-    //    if (R_SUCCEEDED(rc)) {
-    //        fsFsCreateFile(&g_sdmc, "/debug3_pmshell_init_ok.txt", 0, 0);
-    //    } else {
-    //        fsFsCreateFile(&g_sdmc, "/debug3_pmshell_init_FAILED.txt", 0, 0);
-    //    }
-    //}
     
     if (R_SUCCEEDED(rc)) {
         NcmProgramLocation programLocation = {
@@ -208,10 +183,6 @@ void __wrap_exit(void) {
             // CRITICAL: Give PM time to actually spawn the process
             // before we exit and clean up our handles
             svcSleepThread(500000000ULL); // 500ms
-            
-            //if (g_sdmc_initialized) {
-            //    fsFsCreateFile(&g_sdmc, "/debug4_launch_SUCCESS.txt", 0, 0);
-            //}
         }
         
         pmshellExit();
